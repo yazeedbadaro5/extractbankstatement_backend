@@ -30,9 +30,9 @@ class Logger:
             console_handler = colorlog.StreamHandler(sys.stdout)
             console_handler.setLevel(log_level)
             
-            # Create colorful formatter - always use colors!
+            # Create minimal color formatter - log level right after timestamp
             formatter = colorlog.ColoredFormatter(
-                '%(log_color)s%(asctime)s - %(name)s - %(levelname)s - %(message)s%(reset)s',
+                '%(asctime)s [%(log_color)s%(levelname)s%(reset)s] - %(name)s - %(message)s',
                 datefmt='%Y-%m-%d %H:%M:%S',
                 log_colors={
                     'DEBUG': 'cyan',

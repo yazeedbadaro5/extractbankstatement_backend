@@ -1,5 +1,5 @@
 from typing import Optional
-from fastapi import HTTPException, Depends, status
+from fastapi import HTTPException, Depends, status, Request
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from sqlalchemy.ext.asyncio import AsyncSession
 from src.database import get_db
@@ -9,8 +9,9 @@ from src.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
-# Security scheme for extracting Bearer token
-security = HTTPBearer()
+# Security schemes
+security = HTTPBearer()  # Required auth
+optional_security = HTTPBearer(auto_error=False)  # Optional auth
 
 
 async def get_current_user(
@@ -39,11 +40,10 @@ async def get_current_user(
 
 
 async def get_current_user_optional(
-    credentials: Optional[HTTPAuthorizationCredentials] = Depends(security),
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(optional_security),
     db: AsyncSession = Depends(get_db)
 ) -> Optional[User]:
     """Optional authentication - returns user if valid token provided, else None"""
-    
     if not credentials:
         return None
     
@@ -51,3 +51,20 @@ async def get_current_user_optional(
         return await get_current_user(credentials, db)
     except HTTPException:
         return None
+
+
+def get_client_ip(request: Request) -> str:
+    """Extract client IP address from request, handling proxies"""
+    # Check for forwarded IP first (common with reverse proxies)
+    forwarded_for = request.headers.get("X-Forwarded-For")
+    if forwarded_for:
+        # X-Forwarded-For can contain multiple IPs, take the first one
+        return forwarded_for.split(",")[0].strip()
+    
+    # Check for real IP header (some proxies use this)
+    real_ip = request.headers.get("X-Real-IP")
+    if real_ip:
+        return real_ip.strip()
+    
+    # Fall back to direct client IP
+    return request.client.host if request.client else "unknown"

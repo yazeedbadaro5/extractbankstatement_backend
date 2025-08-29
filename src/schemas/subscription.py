@@ -30,3 +30,18 @@ class PortalSessionResponse(BaseModel):
     """Response schema for portal session creation"""
     url: str
 
+
+class CreateSubscriptionRequest(BaseModel):
+    """Request schema for creating a subscription"""
+    price_id: str
+    success_url: Optional[str] = None
+    cancel_url: Optional[str] = None
+
+
+class CreateSubscriptionResponse(BaseModel):
+    """Response schema for subscription creation"""
+    checkout_url: str
+    session_id: str
+    customer_id: str
+    message: str
+

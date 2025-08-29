@@ -24,6 +24,10 @@ class ClerkService:
             try:
                 # Remove pk_test_ prefix
                 encoded_part = settings.clerk_publishable_key.replace('pk_test_', '')
+                # Add padding if needed for base64 decoding
+                missing_padding = len(encoded_part) % 4
+                if missing_padding:
+                    encoded_part += '=' * (4 - missing_padding)
                 # Decode base64 to get the domain
                 decoded_domain = base64.b64decode(encoded_part).decode('utf-8')
                 # Remove any trailing $ if present
@@ -110,8 +114,11 @@ class ClerkService:
             user.email = jwt_data.get("email", user.email)
             user.first_name = jwt_data.get("first_name", user.first_name)
             user.last_name = jwt_data.get("last_name", user.last_name)
-            user.profile_image_url = jwt_data.get("image_url", user.profile_image_url)
-            user.last_sign_in_at = last_sign_in_at
+
+            
+            # Initialize Redis credits if not already set
+            from src.services.redis_credit_service import redis_credit_service
+            await redis_credit_service.initialize_user_credits(user.id, user.credits_balance)
             
             logger.info(f"Updated user: {user.email}")
         else:
@@ -121,9 +128,7 @@ class ClerkService:
                 email=jwt_data.get("email", ""),
                 first_name=jwt_data.get("first_name"),
                 last_name=jwt_data.get("last_name"),
-                profile_image_url=jwt_data.get("image_url"),
-                last_sign_in_at=last_sign_in_at,
-                credits_balance=1  # Start with 1 credit from free plan
+                credits_balance=10  # Start with 10 credits from free plan
             )
             
             db.add(user)
@@ -132,6 +137,10 @@ class ClerkService:
             
             # Auto-assign free plan to new users
             await self._assign_free_plan(db, user)
+            
+            # Initialize Redis credits for new user
+            from src.services.redis_credit_service import redis_credit_service
+            await redis_credit_service.initialize_user_credits(user.id, user.credits_balance)
             
             logger.info(f"Created user: {user.email} with free plan")
         
@@ -156,13 +165,11 @@ class ClerkService:
             # Note: This is not a real Stripe subscription since it's free
             user_subscription = UserSubscription(
                 user_id=user.id,
-                plan_id=free_plan.id,
+                subscription_plan_id=free_plan.id,
                 stripe_subscription_id=f"free_{user.id}_{int(datetime.now().timestamp())}",  # Fake ID
-                stripe_customer_id=f"free_customer_{user.id}",  # Fake customer ID for free plan
                 status="active",  # Free plan is immediately active
                 current_period_start=datetime.now(),
                 current_period_end=datetime(2099, 12, 31),  # Free plan doesn't expire (far future)
-                cancel_at_period_end=False,
                 canceled_at=None
             )
             

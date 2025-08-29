@@ -13,6 +13,7 @@ from src.configuration.config import settings
 from src.models.user import User  # noqa: F401
 from src.models.subscription_plan import SubscriptionPlan  # noqa: F401
 from src.models.user_subscription import UserSubscription  # noqa: F401
+from src.models.transaction import Transaction, StripeEvent  # noqa: F401
 
 # this is the Alembic Config object, which provides
 # access to the values within the .ini file in use.

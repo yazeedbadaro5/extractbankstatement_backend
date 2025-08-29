@@ -208,3 +208,5 @@ logs/
 # Temporary files
 tmp/
 temp/
+dump.rdb
+*.pdf

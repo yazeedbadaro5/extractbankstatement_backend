@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import joinedload
 from sqlalchemy import select
@@ -32,10 +32,10 @@ async def get_current_user_detailed(
     # Reload user with subscription data
     result = await db.execute(
         select(User)
-        .options(joinedload(User.subscription).joinedload(UserSubscription.plan))
+        .options(joinedload(User.subscriptions).joinedload(UserSubscription.subscription_plan))
         .where(User.id == current_user.id)
     )
-    user_with_subscription = result.scalar_one()
+    user_with_subscription = result.unique().scalar_one()
     
     logger.info(f"Getting detailed user info for: {user_with_subscription.email}")
     return user_with_subscription
@@ -48,9 +48,5 @@ async def get_user_credits(
     """Get current user's credits information"""
     return {
         "credits_balance": current_user.credits_balance,
-        "total_credits_used": current_user.total_credits_used,
         "user_id": current_user.id
     }
-
-
-

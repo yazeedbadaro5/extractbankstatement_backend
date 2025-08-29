@@ -10,13 +10,26 @@ class Settings(BaseSettings):
     environment: Literal["development", "production"] = "development"
     
     # Clerk Authentication
-    clerk_secret_key: str = ""
-    clerk_publishable_key: str = ""
+    clerk_secret_key: str
+    clerk_publishable_key: str
     
     # Stripe Configuration
-    stripe_secret_key: str = ""
-    stripe_publishable_key: str = ""
-    stripe_webhook_secret: str = ""
+    stripe_secret_key: str
+    stripe_publishable_key: str
+    stripe_webhook_secret: str
+    
+    # Google Gemini Configuration
+    gemini_api_key: str
+    
+    # Redis Configuration
+    redis_url: str = "redis://localhost:6379"
+    
+    # Rate Limiting Configuration
+    free_tier_max_pages: int = 1
+    
+    # Azure Blob Storage Configuration
+    azure_storage_account_name: str
+    azure_storage_account_key: str
     
     # Database Configuration
     db_host: str = "localhost"
@@ -30,12 +43,6 @@ class Settings(BaseSettings):
     def database_url(self) -> str:
         """Construct database URL from components"""
         return f"postgresql+asyncpg://{self.db_user}:{self.db_password}@{self.db_host}:{self.db_port}/{self.db_name}"
-    
-    @computed_field
-    @property
-    def database_echo(self) -> bool:
-        """Automatically set database echo based on environment"""
-        return self.environment == "development"
     
     class Config:
         env_file = ".env"

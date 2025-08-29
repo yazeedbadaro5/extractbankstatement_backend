@@ -10,7 +10,7 @@ class DatabaseManager:
     def __init__(self):
         self.engine = create_async_engine(
             settings.database_url,
-            echo=settings.database_echo,
+            echo=False,
             future=True
         )
         
