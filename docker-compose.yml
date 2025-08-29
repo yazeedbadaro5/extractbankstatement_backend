@@ -5,7 +5,7 @@ services:
     restart: unless-stopped
     volumes:
       - redis_data:/data
-    command: redis-server --appendonly yes
+    command: redis-server --appendonly yes --maxmemory 1gb --maxmemory-policy allkeys-lru
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 30s
@@ -14,11 +14,11 @@ services:
     deploy:
       resources:
         limits:
-          cpus: '0.5'  # 0.5 core for Redis (lightweight)
-          memory: 1G   # 1GB RAM for Redis
+          cpus: '0.5'
+          memory: 1G
         reservations:
-          cpus: '0.2'  # Minimum 0.2 core
-          memory: 512M # Minimum 512MB RAM
+          cpus: '0.2'
+          memory: 512M
 
   nginx:
     image: nginx:alpine
@@ -41,11 +41,11 @@ services:
     deploy:
       resources:
         limits:
-          cpus: '0.5'  # 0.5 core for Nginx
-          memory: 512M # 512MB RAM for Nginx
+          cpus: '0.5'
+          memory: 512M
         reservations:
-          cpus: '0.2'  # Minimum 0.2 core
-          memory: 256M # Minimum 256MB RAM
+          cpus: '0.2'
+          memory: 256M
 
   app:
     build: .
@@ -62,11 +62,11 @@ services:
     deploy:
       resources:
         limits:
-          cpus: '5.0'  # 5 cores for FastAPI app (multicore processing)
-          memory: 12G  # 12GB RAM for app
+          cpus: '3.0'
+          memory: 6G
         reservations:
-          cpus: '2.0'  # Minimum 2 cores
-          memory: 6G   # Minimum 6GB RAM
+          cpus: '1.5'
+          memory: 3G
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       interval: 30s
