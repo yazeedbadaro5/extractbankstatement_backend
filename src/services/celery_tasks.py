@@ -14,6 +14,8 @@ from src.configuration.config import settings
 # Import specific models to ensure SQLAlchemy can find relationships
 from src.models.user import User
 from src.models.processed_file import ProcessedFile
+from src.models.user_subscription import UserSubscription
+from src.models.transaction import Transaction
 
 logger = get_logger(__name__)
 
@@ -226,8 +228,9 @@ async def _process_pdf_async(
                 except Exception as e:
                     logger.error(f"Error saving failed result to cache for task {task_id}: {e}")
             
-            task_manager.fail_task(task_id, result.get("error", "Unknown error"))
-            return {"success": False, "error": result.get("error", "Unknown error")}
+            error_msg = result.get("error", "Unknown error")
+            task_manager.fail_task(task_id, error_msg)
+            raise Exception(f"PDF processing failed: {error_msg}")
             
     except Exception as e:
         logger.error(f"Task {task_id} failed with exception: {e}")
