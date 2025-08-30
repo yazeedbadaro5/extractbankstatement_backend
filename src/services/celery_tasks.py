@@ -11,6 +11,9 @@ from src.utils.logger import get_logger
 from src.utils.rate_limiting import refund_anonymous_pages
 from src.schemas.pdf import TaskStatus
 from src.configuration.config import settings
+# Import specific models to ensure SQLAlchemy can find relationships
+from src.models.user import User
+from src.models.processed_file import ProcessedFile
 
 logger = get_logger(__name__)
 

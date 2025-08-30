@@ -11,7 +11,7 @@ import warnings
 import logging
 from typing import List, Dict, Optional, Any
 from datetime import datetime
-from concurrent.futures import ProcessPoolExecutor
+from concurrent.futures import ThreadPoolExecutor
 
 # PDF to image conversion
 import fitz  # PyMuPDF
@@ -184,7 +184,7 @@ class UniversalPDFExtractionService:
         all_results = []
         pages_completed = 0
         
-        with ProcessPoolExecutor(max_workers=num_cores) as executor:
+        with ThreadPoolExecutor(max_workers=num_cores) as executor:
             futures = [executor.submit(UniversalPDFExtractionService.run_batch_in_process, batch) for batch in batches]
             
             for i, future in enumerate(futures):
