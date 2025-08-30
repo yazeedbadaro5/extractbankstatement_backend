@@ -167,7 +167,7 @@ def upgrade() -> None:
         # Starter Plans
         {
             'name': 'Starter',
-            'stripe_price_id': 'price_1RxmNmLn4QJvS1C7THxR0mF7',
+            'stripe_price_id': 'price_1S1rEcLcJ2elVE4ir1pQyVH1',
             'price': 1500,  # $15.00
             'currency': 'usd',
             'interval': 'month',
@@ -176,7 +176,7 @@ def upgrade() -> None:
         },
         {
             'name': 'Starter',
-            'stripe_price_id': 'price_1RxmNnLn4QJvS1C7978PaBJo',
+            'stripe_price_id': 'price_1S1rFcLcJ2elVE4iJIjZMyrz',
             'price': 9000,  # $90.00
             'currency': 'usd',
             'interval': 'year',
@@ -187,7 +187,7 @@ def upgrade() -> None:
         # Professional Plans
         {
             'name': 'Professional',
-            'stripe_price_id': 'price_1RxmNpLn4QJvS1C7TPmxlPTi',
+            'stripe_price_id': 'price_1S1rG4LcJ2elVE4iP87WPTfe',
             'price': 3000,  # $30.00
             'currency': 'usd',
             'interval': 'month',
@@ -196,7 +196,7 @@ def upgrade() -> None:
         },
         {
             'name': 'Professional',
-            'stripe_price_id': 'price_1RxmNwLn4QJvS1C7SgPBDWJQ',
+            'stripe_price_id': 'price_1S1rGLLcJ2elVE4irpTTpkVy',
             'price': 18000,  # $180.00
             'currency': 'usd',
             'interval': 'year',
@@ -207,7 +207,7 @@ def upgrade() -> None:
         # Business Plans
         {
             'name': 'Business',
-            'stripe_price_id': 'price_1RxmNyLn4QJvS1C7ujPlmRcX',
+            'stripe_price_id': 'price_1S1rGoLcJ2elVE4iLm8qPt0n',
             'price': 5000,  # $50.00
             'currency': 'usd',
             'interval': 'month',
@@ -216,7 +216,7 @@ def upgrade() -> None:
         },
         {
             'name': 'Business',
-            'stripe_price_id': 'price_1RxmNzLn4QJvS1C7JnxyFh2K',
+            'stripe_price_id': 'price_1S1rH2LcJ2elVE4i3HoEGuWq',
             'price': 30000,  # $300.00
             'currency': 'usd',
             'interval': 'year',

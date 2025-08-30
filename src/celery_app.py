@@ -1,5 +1,12 @@
+import os
 from celery import Celery
 from src.configuration.config import settings
+
+# Configure gRPC for optimal performance in Celery workers
+os.environ['GRPC_POLL_STRATEGY'] = 'poll'
+os.environ['GRPC_ENABLE_FORK_SUPPORT'] = '1'
+os.environ['GRPC_VERBOSITY'] = 'NONE'
+os.environ['GRPC_TRACE'] = ''
 
 # Create Celery app
 celery_app = Celery(

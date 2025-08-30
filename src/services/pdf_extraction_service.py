@@ -172,10 +172,19 @@ class UniversalPDFExtractionService:
                 'total_pages': total_pages
             })
         
-        # Use multiprocessing for extraction - now we can use all cores since we're in isolated Celery worker
+        # Smart concurrency scaling based on workload size
         available_cores = mp.cpu_count()  # Use ALL cores allocated to this Celery worker
-        num_cores = min(available_cores, len(page_data_list))
-        logger.info(f"Using {num_cores} CPU cores for processing (all available cores in Celery worker)")
+        
+        # Scale threads based on page count for optimal performance
+        if len(page_data_list) <= 2:
+            num_cores = 1  # Single/few pages: no threading overhead
+            logger.info(f"Small batch ({len(page_data_list)} pages): using 1 thread for efficiency")
+        elif len(page_data_list) <= 6:
+            num_cores = min(2, available_cores)  # Medium batch: 2 threads
+            logger.info(f"Medium batch ({len(page_data_list)} pages): using {num_cores} threads")
+        else:
+            num_cores = min(4, available_cores)  # Large batch: up to 4 threads for max speed
+            logger.info(f"Large batch ({len(page_data_list)} pages): using {num_cores} threads for maximum speed")
         
         # Create batches
         batch_size = max(1, len(page_data_list) // num_cores)
@@ -310,11 +319,13 @@ class UniversalPDFExtractionService:
                 logger.error("Gemini API key not available in worker process")
                 return []
             
-            # Single model initialization per worker
+            # Single model initialization per worker with optimized settings
             llm = ChatGoogleGenerativeAI(
                 model="gemini-2.5-pro-preview-03-25",
                 google_api_key=settings.gemini_api_key,
-                temperature=0
+                temperature=0,
+                max_retries=2,  # Reduce retries to prevent connection buildup
+                request_timeout=60  # Set reasonable timeout
             )
             
             # Create system message for this worker
