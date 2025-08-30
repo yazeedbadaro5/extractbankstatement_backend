@@ -26,7 +26,7 @@ from src.configuration.config import settings
 logger = get_logger(__name__)
 
 # Thread pool for running multiprocessing tasks without blocking FastAPI
-thread_pool = ThreadPoolExecutor(max_workers=None)  # Unlimited workers
+thread_pool = ThreadPoolExecutor(max_workers=2)  # Unlimited workers
 
 router = APIRouter(prefix="/pdf", tags=["pdf"])
 
