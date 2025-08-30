@@ -172,10 +172,10 @@ class UniversalPDFExtractionService:
                 'total_pages': total_pages
             })
         
-        # Use multiprocessing for extraction
-        available_cores = max(1, mp.cpu_count() - 1)
+        # Use multiprocessing for extraction - now we can use all cores since we're in isolated Celery worker
+        available_cores = mp.cpu_count()  # Use ALL cores allocated to this Celery worker
         num_cores = min(available_cores, len(page_data_list))
-        logger.info(f"Using {num_cores} CPU cores for processing")
+        logger.info(f"Using {num_cores} CPU cores for processing (all available cores in Celery worker)")
         
         # Create batches
         batch_size = max(1, len(page_data_list) // num_cores)

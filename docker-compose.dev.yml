@@ -77,6 +77,39 @@ services:
       - .:/app  # Mount current directory for live code changes
     command: ["uvicorn", "src.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
 
+  celery-worker:
+    build: .
+    container_name: celery-worker-dev
+    restart: unless-stopped
+    command: celery -A src.celery_app worker --loglevel=info --concurrency=2
+    env_file:
+      - .env
+    environment:
+      - REDIS_URL=redis://redis:6379
+      - DB_HOST=postgres
+      - DB_PORT=5432
+      - DB_USER=postgres
+      - DB_PASSWORD=postgres
+      - DB_NAME=bankstatement_dev
+      - ENVIRONMENT=development
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrations:
+        condition: service_completed_successfully
+    volumes:
+      - .:/app
+    deploy:
+      resources:
+        limits:
+          cpus: '3.0'
+          memory: 5G
+        reservations:
+          cpus: '2.0'
+          memory: 3G
+
   stripe-cli:
     image: stripe/stripe-cli:latest
     container_name: stripe-cli-dev

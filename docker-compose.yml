@@ -63,17 +63,45 @@ services:
     deploy:
       resources:
         limits:
-          cpus: '3.0'
-          memory: 6G
+          cpus: '1.0'
+          memory: 2G
         reservations:
-          cpus: '1.5'
-          memory: 3G
+          cpus: '0.5'
+          memory: 1G
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       interval: 30s
       timeout: 10s
       retries: 3
       start_period: 40s
+
+  celery-worker:
+    build: .
+    container_name: celery-worker
+    restart: unless-stopped
+    command: celery -A src.celery_app worker --loglevel=info --concurrency=2
+    env_file:
+      - .env
+    environment:
+      - REDIS_URL=redis://redis:6379
+      - ENVIRONMENT=production
+    depends_on:
+      redis:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          cpus: '3.0'
+          memory: 5G
+        reservations:
+          cpus: '2.0'
+          memory: 3G
+    healthcheck:
+      test: ["CMD", "celery", "-A", "src.celery_app", "inspect", "ping"]
+      interval: 60s
+      timeout: 30s
+      retries: 3
+      start_period: 60s
 
 volumes:
   redis_data:
