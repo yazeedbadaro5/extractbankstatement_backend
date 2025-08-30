@@ -87,14 +87,14 @@ def process_pdf_task(
                     # Refund pages for anonymous users
                     try:
                         client_ip = task_info.get('client_ip')
-                    if client_ip and page_count > 0:
-                        loop = asyncio.new_event_loop()
-                        asyncio.set_event_loop(loop)
-                        try:
-                            loop.run_until_complete(refund_anonymous_pages(client_ip, page_count))
-                            logger.info(f"Refunded {page_count} pages to anonymous user {client_ip}")
-                        finally:
-                            loop.close()
+                        if client_ip and page_count > 0:
+                            loop = asyncio.new_event_loop()
+                            asyncio.set_event_loop(loop)
+                            try:
+                                loop.run_until_complete(refund_anonymous_pages(client_ip, page_count))
+                                logger.info(f"Refunded {page_count} pages to anonymous user {client_ip}")
+                            finally:
+                                loop.close()
                 except Exception as refund_error:
                     logger.error(f"Failed to refund anonymous pages: {refund_error}")
             else:
