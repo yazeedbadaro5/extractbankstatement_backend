@@ -1,4 +1,5 @@
 import asyncio
+import json
 import os
 from typing import Optional, List
 
@@ -73,13 +74,19 @@ def process_pdf_task(
         task_manager.fail_task(task_id, str(e))
         
         # Handle refunds on failure
-        if task_id in task_manager.tasks:
-            page_count = task_manager.tasks[task_id].get('page_count', 0)
-            
-            if not user_id:
-                # Refund pages for anonymous users
-                try:
-                    client_ip = task_manager.tasks[task_id].get('client_ip')
+        task_data = task_manager.get_task(task_id)
+        if task_data:
+            # Get task data from Redis
+            task_key = f"task:{task_id}"
+            task_json = task_manager.redis_client.get(task_key)
+            if task_json:
+                task_info = json.loads(task_json)
+                page_count = task_info.get('page_count', 0)
+                
+                if not user_id:
+                    # Refund pages for anonymous users
+                    try:
+                        client_ip = task_info.get('client_ip')
                     if client_ip and page_count > 0:
                         loop = asyncio.new_event_loop()
                         asyncio.set_event_loop(loop)
@@ -137,70 +144,75 @@ async def _process_pdf_async(
         # Update progress
         task_manager.update_task_status(task_id, TaskStatus.PROCESSING, "Finalizing results...", 90.0)
         
-        if result["success"] and task_id in task_manager.tasks:
-            page_count = task_manager.tasks[task_id].get('page_count', 0)
-            
-            # Store Excel file in Azure and save to cache
-            if cache_key and result.get("excel_path"):
-                try:
-                    # Read the Excel file content
-                    with open(result["excel_path"], "rb") as excel_file:
-                        excel_content = excel_file.read()
-                    
-                    # Store Excel in Azure with cache_key for unique naming
-                    azure_excel_url = await file_cache_service.store_excel_result(cache_key, excel_content)
-                    
-                    # Save processing result to cache
-                    from src.database import get_db
-                    async for db in get_db():
-                        azure_pdf_url = f"https://{settings.azure_storage_account_name}.blob.core.windows.net/bank-statements/pdfs/{file_hash}.pdf"
-                        await file_cache_service.save_processed_file(
-                            db=db,
-                            user_id=user_id,
-                            file_hash=file_hash,
-                            columns_hash=columns_hash,
-                            cache_key=cache_key,
-                            columns=columns,
-                            original_filename=filename,
-                            file_size_bytes=len(file_bytes),
-                            azure_pdf_url=azure_pdf_url,
-                            azure_excel_url=azure_excel_url,
-                            processing_status="completed",
-                            processing_time_seconds=result["processing_time"]
-                        )
-                        logger.info(f"Saved successful processing result to cache for key {cache_key[:16]}...")
-                        break
-                except Exception as e:
-                    logger.error(f"Error saving to cache for task {task_id}: {e}")
-            
-            if user_id:
-                # Confirm credit usage for authenticated users after successful processing
-                try:
-                    if page_count > 0:
-                        required_credits = page_count  # 1 credit per page
-                        await redis_credit_service.confirm_credit_usage_atomic(user_id, required_credits)
-                        logger.info(f"Confirmed {required_credits} credits usage for user_id {user_id} for task {task_id}")
+        if result["success"]:
+            # Get task data from Redis
+            task_key = f"task:{task_id}"
+            task_json = task_manager.redis_client.get(task_key)
+            if task_json:
+                task_info = json.loads(task_json)
+                page_count = task_info.get('page_count', 0)
+                
+                # Store Excel file in Azure and save to cache
+                if cache_key and result.get("excel_path"):
+                    try:
+                        # Read the Excel file content
+                        with open(result["excel_path"], "rb") as excel_file:
+                            excel_content = excel_file.read()
                         
-                        # Sync database balance with Redis
+                        # Store Excel in Azure with cache_key for unique naming
+                        azure_excel_url = await file_cache_service.store_excel_result(cache_key, excel_content)
+                        
+                        # Save processing result to cache
                         from src.database import get_db
                         async for db in get_db():
-                            await redis_credit_service.sync_database_balance(user_id, db)
+                            azure_pdf_url = f"https://{settings.azure_storage_account_name}.blob.core.windows.net/bank-statements/pdfs/{file_hash}.pdf"
+                            await file_cache_service.save_processed_file(
+                                db=db,
+                                user_id=user_id,
+                                file_hash=file_hash,
+                                columns_hash=columns_hash,
+                                cache_key=cache_key,
+                                columns=columns,
+                                original_filename=filename,
+                                file_size_bytes=len(file_bytes),
+                                azure_pdf_url=azure_pdf_url,
+                                azure_excel_url=azure_excel_url,
+                                processing_status="completed",
+                                processing_time_seconds=result["processing_time"]
+                            )
+                            logger.info(f"Saved successful processing result to cache for key {cache_key[:16]}...")
                             break
-                except Exception as e:
-                    logger.error(f"Failed to confirm credit usage for task {task_id}: {e}")
-            else:
-                # Pages already reserved for anonymous users - no additional action needed on success
-                logger.info(f"Anonymous user successfully processed {page_count} pages for task {task_id}")
-            
-            # Complete the task
-            task_manager.complete_task(task_id, {
-                "total_rows": result["total_rows"],
-                "columns": result["columns"],
-                "processing_time": result["processing_time"],
-                "statement_file_id": cache_key if cache_key else os.path.basename(result["excel_path"])
-            })
-            
-            return {"success": True, "task_id": task_id}
+                    except Exception as e:
+                        logger.error(f"Error saving to cache for task {task_id}: {e}")
+                
+                if user_id:
+                    # Confirm credit usage for authenticated users after successful processing
+                    try:
+                        if page_count > 0:
+                            required_credits = page_count  # 1 credit per page
+                            await redis_credit_service.confirm_credit_usage_atomic(user_id, required_credits)
+                            logger.info(f"Confirmed {required_credits} credits usage for user_id {user_id} for task {task_id}")
+                            
+                            # Sync database balance with Redis
+                            from src.database import get_db
+                            async for db in get_db():
+                                await redis_credit_service.sync_database_balance(user_id, db)
+                                break
+                    except Exception as e:
+                        logger.error(f"Failed to confirm credit usage for task {task_id}: {e}")
+                else:
+                    # Pages already reserved for anonymous users - no additional action needed on success
+                    logger.info(f"Anonymous user successfully processed {page_count} pages for task {task_id}")
+                
+                # Complete the task
+                task_manager.complete_task(task_id, {
+                    "total_rows": result["total_rows"],
+                    "columns": result["columns"],
+                    "processing_time": result["processing_time"],
+                    "statement_file_id": cache_key if cache_key else os.path.basename(result["excel_path"])
+                })
+                
+                return {"success": True, "task_id": task_id}
         else:
             # Handle failed processing
             if cache_key:
