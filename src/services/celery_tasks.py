@@ -12,11 +12,13 @@ from src.utils.logger import get_logger
 from src.utils.rate_limiting import refund_anonymous_pages
 from src.schemas.pdf import TaskStatus
 from src.configuration.config import settings
-# Import specific models to ensure SQLAlchemy can find relationships
+# Import all models to ensure SQLAlchemy can find all relationships
 from src.models.user import User
 from src.models.processed_file import ProcessedFile
 from src.models.user_subscription import UserSubscription
+from src.models.subscription_plan import SubscriptionPlan
 from src.models.transaction import Transaction
+from src.models.base import Base
 
 logger = get_logger(__name__)
 
