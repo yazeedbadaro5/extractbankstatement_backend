@@ -95,8 +95,8 @@ def process_pdf_task(
                                 logger.info(f"Refunded {page_count} pages to anonymous user {client_ip}")
                             finally:
                                 loop.close()
-                except Exception as refund_error:
-                    logger.error(f"Failed to refund anonymous pages: {refund_error}")
+                    except Exception as refund_error:
+                        logger.error(f"Failed to refund anonymous pages: {refund_error}")
             else:
                 # Refund credits for authenticated users
                 try:
