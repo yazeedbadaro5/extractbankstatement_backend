@@ -21,16 +21,6 @@ class SubscriptionPlanResponse(BaseModel):
 
 
 
-class PortalSessionRequest(BaseModel):
-    """Request schema for creating a portal session"""
-    return_url: str
-
-
-class PortalSessionResponse(BaseModel):
-    """Response schema for portal session creation"""
-    url: str
-
-
 class CreateSubscriptionRequest(BaseModel):
     """Request schema for creating a subscription"""
     price_id: str
@@ -44,4 +34,12 @@ class CreateSubscriptionResponse(BaseModel):
     session_id: str
     customer_id: str
     message: str
+
+
+class CancelSubscriptionResponse(BaseModel):
+    """Response schema for subscription cancellation"""
+    message: str
+    access_ends_at: datetime
+    current_credits: int
+    plan_name: str
 

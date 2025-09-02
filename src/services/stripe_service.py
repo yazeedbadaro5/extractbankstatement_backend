@@ -19,7 +19,7 @@ class StripeService:
         logger.info("Stripe service initialized")
     
     async def get_or_create_customer(self, user: User) -> str:
-        """Get existing or create new Stripe customer for portal access"""
+        """Get existing or create new Stripe customer"""
         try:
             # Check if customer already exists with this email
             customers = stripe.Customer.list(email=user.email, limit=1)
@@ -29,7 +29,7 @@ class StripeService:
                 logger.info(f"Found existing Stripe customer {customer.id} for user {user.email}")
                 return customer.id
             
-            # Create new customer for portal access
+            # Create new customer
             customer = stripe.Customer.create(
                 email=user.email,
                 name=f"{user.first_name or ''} {user.last_name or ''}".strip(),
@@ -44,21 +44,6 @@ class StripeService:
             
         except stripe.StripeError as e:
             logger.error(f"Failed to get/create Stripe customer for {user.email}: {e}")
-            raise
-    
-    async def create_portal_session(self, customer_id: str, return_url: str) -> str:
-        """Create a customer portal session for managing subscriptions"""
-        try:
-            session = stripe.billing_portal.Session.create(
-                customer=customer_id,
-                return_url=return_url
-            )
-            
-            logger.info(f"Created portal session for customer {customer_id}")
-            return session.url
-            
-        except stripe.StripeError as e:
-            logger.error(f"Failed to create portal session for {customer_id}: {e}")
             raise
     
     async def sync_subscription_from_stripe(

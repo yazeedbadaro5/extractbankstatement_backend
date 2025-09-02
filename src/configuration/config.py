@@ -22,7 +22,7 @@ class Settings(BaseSettings):
     gemini_api_key: str
     
     # Redis Configuration
-    redis_url: str = "redis://localhost:6379"
+    redis_url: str 
     
     # Rate Limiting Configuration
     free_tier_max_pages: int = 1
@@ -32,11 +32,11 @@ class Settings(BaseSettings):
     azure_storage_account_key: str
     
     # Database Configuration
-    db_host: str = "localhost"
-    db_port: int = 5432
-    db_user: str = "postgres"
-    db_password: str = "password"
-    db_name: str = "database"
+    db_host: str 
+    db_port: int
+    db_user: str
+    db_password: str
+    db_name: str 
     
     @computed_field
     @property
@@ -45,7 +45,9 @@ class Settings(BaseSettings):
         return f"postgresql+asyncpg://{self.db_user}:{self.db_password}@{self.db_host}:{self.db_port}/{self.db_name}"
     
     class Config:
-        env_file = ".env"
+        import os
+        env = os.getenv('ENVIRONMENT', 'development')
+        env_file = '.env.dev' if env == 'development' else '.env'
 
 
 settings = Settings()

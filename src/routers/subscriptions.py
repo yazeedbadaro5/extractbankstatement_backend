@@ -11,10 +11,9 @@ from src.models.subscription_plan import SubscriptionPlan
 from src.models.user_subscription import UserSubscription
 from src.schemas.subscription import (
     SubscriptionPlanResponse,
-    PortalSessionRequest,
-    PortalSessionResponse,
     CreateSubscriptionRequest,
-    CreateSubscriptionResponse
+    CreateSubscriptionResponse,
+    CancelSubscriptionResponse
 )
 from src.services.stripe_service import stripe_service
 from src.services.transaction_service import transaction_service
@@ -36,54 +35,6 @@ async def get_subscription_plans(db: AsyncSession = Depends(get_db)):
     logger.info(f"Retrieved {len(plans)} active subscription plans")
     return plans
 
-
-
-@router.post("/portal", response_model=PortalSessionResponse)
-async def create_portal_session(
-    request: PortalSessionRequest,
-    current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db)
-):
-    """Create a Stripe customer portal session for subscription management"""
-    
-    try:
-        # Check if user has an active paid subscription
-        result = await db.execute(
-            select(UserSubscription)
-            .join(SubscriptionPlan)
-            .where(UserSubscription.user_id == current_user.id)
-            .where(UserSubscription.status.in_(["active", "trialing", "past_due"]))
-            .where(SubscriptionPlan.name != "Free")  # Exclude free plan
-        )
-        subscription = result.scalar_one_or_none()
-        
-        if not subscription:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Portal access requires an active paid subscription. Please upgrade your plan first."
-            )
-        
-        # Get or create Stripe customer for portal access
-        customer_id = await stripe_service.get_or_create_customer(current_user)
-        
-        # Create portal session
-        portal_url = await stripe_service.create_portal_session(
-            customer_id=customer_id,
-            return_url=request.return_url
-        )
-        
-        logger.info(f"Created portal session for user {current_user.email}")
-        
-        return PortalSessionResponse(url=portal_url)
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Failed to create portal session for user {current_user.id}: {e}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to create portal session"
-        )
 
 
 @router.get("/current")
@@ -180,4 +131,61 @@ async def create_subscription(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to create subscription. Please try again."
+        )
+
+
+@router.delete("/cancel", response_model=CancelSubscriptionResponse)
+async def cancel_subscription(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """Cancel user's active paid subscription at period end"""
+    
+    try:
+        # Find the user's active paid subscription
+        result = await db.execute(
+            select(UserSubscription)
+            .join(SubscriptionPlan)
+            .where(UserSubscription.user_id == current_user.id)
+            .where(UserSubscription.status.in_(["active", "trialing", "past_due"]))
+            .where(SubscriptionPlan.name != "Free")  # Exclude free plan
+            .options(joinedload(UserSubscription.subscription_plan))
+        )
+        subscription = result.scalar_one_or_none()
+        
+        if not subscription:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="No active paid subscription found to cancel"
+            )
+        
+        # Cancel subscription at period end in Stripe
+        stripe.Subscription.modify(
+            subscription.stripe_subscription_id,
+            cancel_at_period_end=True
+        )
+        
+        # Get current user credits from Redis cache
+        from src.services.redis_credit_service import redis_credit_service
+        current_credits = await redis_credit_service.get_user_credits(current_user.id)
+        
+        logger.info(
+            f"✅ Cancelled subscription {subscription.id} for user {current_user.email} "
+            f"at period end ({subscription.current_period_end}). Credits preserved: {current_credits}"
+        )
+        
+        return CancelSubscriptionResponse(
+            message=f"Your {subscription.subscription_plan.name} subscription has been cancelled and will end on {subscription.current_period_end.strftime('%B %d, %Y')}. You'll keep all your current credits and continue to have access until then.",
+            access_ends_at=subscription.current_period_end,
+            current_credits=current_credits,
+            plan_name=subscription.subscription_plan.name
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"❌ Error cancelling subscription for user {current_user.email}: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to cancel subscription. Please try again."
         )

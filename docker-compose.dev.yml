@@ -5,17 +5,27 @@ services:
     restart: unless-stopped
     ports:
       - "5432:5432"
+    env_file:
+      - .env.dev
     environment:
-      POSTGRES_DB: bankstatement_dev
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres
+      - POSTGRES_DB=bankstatement_dev
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=postgres
     volumes:
       - postgres_dev_data:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres -d bankstatement_dev"]
-      interval: 5s
-      timeout: 5s
-      retries: 5
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 1G
+        reservations:
+          cpus: '0.2'
+          memory: 512M
 
   redis:
     image: redis:7-alpine
@@ -25,24 +35,28 @@ services:
       - "6379:6379"
     volumes:
       - redis_dev_data:/data
-    command: redis-server --appendonly yes
+    command: redis-server --appendonly yes --maxmemory 1gb --maxmemory-policy allkeys-lru
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
-      interval: 5s
-      timeout: 3s
-      retries: 5
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 1G
+        reservations:
+          cpus: '0.2'
+          memory: 512M
 
   migrations:
     build: .
     container_name: migrations-dev
     env_file:
-      - .env
+      - .env.dev
     environment:
-      - DB_HOST=postgres
-      - DB_PORT=5432
-      - DB_USER=postgres
-      - DB_PASSWORD=postgres
-      - DB_NAME=bankstatement_dev
+      - ENVIRONMENT=development
     depends_on:
       postgres:
         condition: service_healthy
@@ -57,14 +71,8 @@ services:
     ports:
       - "8000:8000"
     env_file:
-      - .env
+      - .env.dev
     environment:
-      - REDIS_URL=redis://redis:6379
-      - DB_HOST=postgres
-      - DB_PORT=5432
-      - DB_USER=postgres
-      - DB_PASSWORD=postgres
-      - DB_NAME=bankstatement_dev
       - ENVIRONMENT=development
     depends_on:
       postgres:
@@ -76,6 +84,20 @@ services:
     volumes:
       - .:/app  # Mount current directory for live code changes
     command: ["uvicorn", "src.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 2G
+        reservations:
+          cpus: '0.5'
+          memory: 1G
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
 
   celery-worker:
     build: .
@@ -83,14 +105,8 @@ services:
     restart: unless-stopped
     command: celery -A src.celery_app worker --loglevel=info --concurrency=2
     env_file:
-      - .env
+      - .env.dev
     environment:
-      - REDIS_URL=redis://redis:6379
-      - DB_HOST=postgres
-      - DB_PORT=5432
-      - DB_USER=postgres
-      - DB_PASSWORD=postgres
-      - DB_NAME=bankstatement_dev
       - ENVIRONMENT=development
     depends_on:
       postgres:
@@ -109,16 +125,12 @@ services:
         reservations:
           cpus: '2.0'
           memory: 3G
-
-  stripe-cli:
-    image: stripe/stripe-cli:latest
-    container_name: stripe-cli-dev
-    restart: unless-stopped
-    command: ["listen", "--forward-to", "app:8000/api/v1/webhooks/stripe", "--events", "*"]
-    environment:
-      - STRIPE_API_KEY=${STRIPE_SECRET_KEY}
-    depends_on:
-      - app
+    healthcheck:
+      test: ["CMD", "celery", "-A", "src.celery_app", "inspect", "ping"]
+      interval: 60s
+      timeout: 30s
+      retries: 3
+      start_period: 60s
 
 volumes:
   postgres_dev_data:

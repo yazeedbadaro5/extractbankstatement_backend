@@ -6,9 +6,11 @@ Create Date: 2025-08-26 12:12:23.095244
 
 """
 from typing import Sequence, Union
+import stripe
 
 from alembic import op
 import sqlalchemy as sa
+from src.configuration.config import settings
 
 
 # revision identifiers, used by Alembic.
@@ -131,8 +133,11 @@ def upgrade() -> None:
     op.create_index(op.f('ix_stripe_events_transaction_id'), 'stripe_events', ['transaction_id'], unique=False)
 
     # ============================================================================
-    # 2. SEED SUBSCRIPTION PLANS DATA
+    # 2. SEED SUBSCRIPTION PLANS DATA (Environment-Aware)
     # ============================================================================
+    
+    # Get environment from settings
+    environment = settings.environment
     
     # Define table structure for subscription_plans seeding
     metadata = sa.MetaData()
@@ -151,79 +156,80 @@ def upgrade() -> None:
         sa.Column('is_active', sa.Boolean),
     )
     
-    # Seed data - All subscription plans
-    plans_data = [
-        # Free Plan
-        {
-            'name': 'Free',
-            'stripe_price_id': 'free_plan',
-            'price': 0,
-            'currency': 'usd',
-            'interval': 'month',
-            'monthly_credits': 10,
-            'is_active': True
-        },
-        
-        # Starter Plans
-        {
-            'name': 'Starter',
-            'stripe_price_id': 'price_1S1rEcLcJ2elVE4ir1pQyVH1',
-            'price': 1500,  # $15.00
-            'currency': 'usd',
-            'interval': 'month',
-            'monthly_credits': 400,
-            'is_active': True
-        },
-        {
-            'name': 'Starter',
-            'stripe_price_id': 'price_1S1rFcLcJ2elVE4iJIjZMyrz',
-            'price': 9000,  # $90.00
-            'currency': 'usd',
-            'interval': 'year',
-            'monthly_credits': 4800,  # 12 months worth
-            'is_active': True
-        },
-        
-        # Professional Plans
-        {
-            'name': 'Professional',
-            'stripe_price_id': 'price_1S1rG4LcJ2elVE4iP87WPTfe',
-            'price': 3000,  # $30.00
-            'currency': 'usd',
-            'interval': 'month',
-            'monthly_credits': 1000,
-            'is_active': True
-        },
-        {
-            'name': 'Professional',
-            'stripe_price_id': 'price_1S1rGLLcJ2elVE4irpTTpkVy',
-            'price': 18000,  # $180.00
-            'currency': 'usd',
-            'interval': 'year',
-            'monthly_credits': 12000,  # 12 months worth
-            'is_active': True
-        },
-        
-        # Business Plans
-        {
-            'name': 'Business',
-            'stripe_price_id': 'price_1S1rGoLcJ2elVE4iLm8qPt0n',
-            'price': 5000,  # $50.00
-            'currency': 'usd',
-            'interval': 'month',
-            'monthly_credits': 4000,
-            'is_active': True
-        },
-        {
-            'name': 'Business',
-            'stripe_price_id': 'price_1S1rH2LcJ2elVE4i3HoEGuWq',
-            'price': 30000,  # $300.00
-            'currency': 'usd',
-            'interval': 'year',
-            'monthly_credits': 48000,  # 12 months worth
-            'is_active': True
-        }
-    ]
+    def get_stripe_plans():
+        """Fetch real Stripe products and prices"""
+        try:
+            stripe.api_key = settings.stripe_secret_key
+            if not stripe.api_key or stripe.api_key == 'your_stripe_secret_key':
+                print("⚠️  No valid Stripe API key found, using fallback data")
+                return None
+                
+            print("🔄 Fetching products from Stripe...")
+            products = stripe.Product.list(active=True, limit=100)
+            prices = stripe.Price.list(active=True, limit=100)
+            
+            # Create a mapping of product_id to product
+            products_map = {p.id: p for p in products.data}
+            
+            plans = []
+            
+            # Always add Free plan first (not in Stripe)
+            plans.append({
+                'name': 'Free',
+                'stripe_price_id': 'free_plan',
+                'price': 0,
+                'currency': 'usd',
+                'interval': 'month',
+                'monthly_credits': 10,
+                'is_active': True
+            })
+            
+            # Add Stripe plans
+            for price in prices.data:
+                if price.product in products_map:
+                    product = products_map[price.product]
+                    
+                    # Extract credits from product metadata or use defaults based on price
+                    if price.unit_amount:
+                        if price.unit_amount <= 1500:  # $15 or less
+                            default_credits = 400
+                        elif price.unit_amount <= 3000:  # $30 or less  
+                            default_credits = 1000
+                        else:  # More than $30
+                            default_credits = 4000
+                    else:
+                        default_credits = 100
+                        
+                    monthly_credits = int(product.metadata.get('monthly_credits', default_credits))
+                    
+                    # For yearly plans, multiply by 12
+                    if price.recurring and price.recurring.interval == 'year':
+                        monthly_credits = monthly_credits * 12
+                    
+                    plans.append({
+                        'name': product.name,
+                        'stripe_price_id': price.id,
+                        'price': price.unit_amount or 0,
+                        'currency': price.currency,
+                        'interval': price.recurring.interval if price.recurring else 'month',
+                        'monthly_credits': monthly_credits,
+                        'is_active': True
+                    })
+            
+            print(f"✅ Fetched {len(plans)} plans from Stripe (including Free plan)")
+            return plans
+            
+        except Exception as e:
+            print(f"❌ Error fetching from Stripe: {e}")
+            return None
+    
+    # Get live Stripe data - no fallback
+    plans_data = get_stripe_plans()
+    
+    if not plans_data:
+        raise Exception(f"❌ Failed to fetch Stripe data for {environment} environment. Migration cannot proceed without valid subscription plans.")
+    
+    print(f"🚀 Seeding {len(plans_data)} subscription plans for {environment} environment")
     
     # Insert the plans using ORM bulk insert
     op.bulk_insert(subscription_plans, plans_data)

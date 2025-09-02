@@ -55,7 +55,6 @@ services:
     env_file:
       - .env
     environment:
-      - REDIS_URL=redis://redis:6379
       - ENVIRONMENT=production
     depends_on:
       redis:
@@ -83,7 +82,6 @@ services:
     env_file:
       - .env
     environment:
-      - REDIS_URL=redis://redis:6379
       - ENVIRONMENT=production
     depends_on:
       redis:

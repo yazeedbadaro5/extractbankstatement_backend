@@ -715,8 +715,33 @@ async def handle_subscription_deleted(db: AsyncSession, event):
         user_subscription.status = 'canceled'
         user_subscription.canceled_at = datetime.fromtimestamp(subscription_data.get('canceled_at', time.time()))
         
+        # Get the user ID for creating a new Free subscription
+        user_id = user_subscription.user_id
+        
+        # Find the Free plan
+        free_plan_result = await db.execute(
+            select(SubscriptionPlan).where(SubscriptionPlan.name == "Free")
+        )
+        free_plan = free_plan_result.scalar_one_or_none()
+        
+        if free_plan:
+            # Create a new Free subscription for the user
+            free_subscription = UserSubscription(
+                user_id=user_id,
+                subscription_plan_id=free_plan.id,
+                stripe_subscription_id=f"free_{user_id}_{int(time.time())}",
+                status="active",
+                current_period_start=datetime.now(),
+                current_period_end=datetime(2099, 12, 31)  # Far future date for free plan
+            )
+            
+            db.add(free_subscription)
+            logger.info(f"✅ Auto-created Free subscription for user {user_id} after paid subscription cancellation")
+        else:
+            logger.error("❌ Could not find Free plan to create fallback subscription")
+        
         await db.commit()
-        logger.info(f"✅ Canceled subscription: {user_subscription.id}")
+        logger.info(f"✅ Canceled subscription: {user_subscription.id} and created Free subscription")
         
     except Exception as e:
         logger.error(f"Error handling subscription deleted: {e}")
