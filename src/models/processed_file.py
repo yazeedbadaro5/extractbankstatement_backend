@@ -11,6 +11,10 @@ class ProcessedFile(BaseModel):
     # User Reference (nullable for anonymous users)
     user_id = Column(Integer, ForeignKey("users.id"), nullable=True, index=True)
     
+    # Task Tracking
+    task_id = Column(String, nullable=True, index=True)  # UUID from Redis task manager
+    client_ip = Column(String, nullable=True, index=True)  # IP address for anonymous user recovery
+    
     # File Identification
     file_hash = Column(String, nullable=False, index=True)  # SHA-256 hash of file content
     columns_hash = Column(String, nullable=False, index=True)  # Hash of requested columns

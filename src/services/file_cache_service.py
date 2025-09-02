@@ -78,7 +78,9 @@ class FileCacheService:
         azure_excel_url: Optional[str],
         processing_status: str,
         processing_time_seconds: Optional[float],
-        error_message: Optional[str] = None
+        error_message: Optional[str] = None,
+        task_id: Optional[str] = None,
+        client_ip: Optional[str] = None
     ) -> ProcessedFile:
         """
         Save processed file information to database
@@ -120,7 +122,9 @@ class FileCacheService:
                     azure_excel_url=azure_excel_url,
                     processing_status=processing_status,
                     processing_time_seconds=processing_time_seconds,
-                    error_message=error_message
+                    error_message=error_message,
+                    task_id=task_id,
+                    client_ip=client_ip
                 )
                 
                 db.add(processed_file)

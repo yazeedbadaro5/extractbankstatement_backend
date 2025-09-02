@@ -41,18 +41,17 @@ app = FastAPI(
     title="Bank Statement Extraction API", 
     version="1.0.0",
     description="Universal bank statement extraction service - Extract and process bank statements with AI-powered processing",
-    lifespan=lifespan
+    lifespan=lifespan,
+    # Hide docs in production
+    docs_url="/docs" if settings.environment == "development" else None,
+    redoc_url="/redoc" if settings.environment == "development" else None,
+    openapi_url="/openapi.json" if settings.environment == "development" else None,
 )
 
 # Add CORS middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:3000",  # Keep for local development
-        "http://localhost:5173",  # Keep for local development
-        "https://extractbankstatement.com",  # Your production domain
-        "https://www.extractbankstatement.com"  # With www subdomain
-    ],
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

@@ -73,7 +73,16 @@ def process_pdf_task(
             
     except Exception as e:
         logger.error(f"Celery task {self.request.id} failed with exception: {e}")
-        task_manager.fail_task(task_id, str(e))
+        try:
+            task_manager.fail_task(task_id, str(e))
+        except Exception as fail_error:
+            logger.error(f"Failed to mark task {task_id} as failed: {fail_error}")
+        
+        # Ensure task is properly acknowledged even on failure
+        try:
+            self.update_state(state='FAILURE', meta={'error': str(e)})
+        except Exception as state_error:
+            logger.error(f"Failed to update task state: {state_error}")
         
         # Handle refunds on failure
         task_data = task_manager.get_task(task_id)
@@ -168,6 +177,12 @@ async def _process_pdf_async(
                         from src.database import get_db
                         async for db in get_db():
                             azure_pdf_url = f"https://{settings.azure_storage_account_name}.blob.core.windows.net/bank-statements/pdfs/{file_hash}.pdf"
+                            
+                            # Get task data from Redis to extract client_ip
+                            task_data_json = task_manager.redis_client.get(f"task:{task_id}")
+                            task_data = json.loads(task_data_json) if task_data_json else {}
+                            client_ip = task_data.get("client_ip")
+                            
                             await file_cache_service.save_processed_file(
                                 db=db,
                                 user_id=user_id,
@@ -180,7 +195,9 @@ async def _process_pdf_async(
                                 azure_pdf_url=azure_pdf_url,
                                 azure_excel_url=azure_excel_url,
                                 processing_status="completed",
-                                processing_time_seconds=result["processing_time"]
+                                processing_time_seconds=result["processing_time"],
+                                task_id=task_id,
+                                client_ip=client_ip
                             )
                             logger.info(f"Saved successful processing result to cache for key {cache_key[:16]}...")
                             break
@@ -214,6 +231,7 @@ async def _process_pdf_async(
                     "statement_file_id": cache_key if cache_key else os.path.basename(result["excel_path"])
                 })
                 
+                logger.info(f"Task {task_id} completed successfully")
                 return {"success": True, "task_id": task_id}
         else:
             # Handle failed processing
@@ -222,6 +240,12 @@ async def _process_pdf_async(
                     from src.database import get_db
                     async for db in get_db():
                         azure_pdf_url = f"https://{settings.azure_storage_account_name}.blob.core.windows.net/bank-statements/pdfs/{file_hash}.pdf"
+                        
+                        # Get task data from Redis to extract client_ip
+                        task_data_json = task_manager.redis_client.get(f"task:{task_id}")
+                        task_data = json.loads(task_data_json) if task_data_json else {}
+                        client_ip = task_data.get("client_ip")
+                        
                         await file_cache_service.save_processed_file(
                             db=db,
                             user_id=user_id,
@@ -235,7 +259,9 @@ async def _process_pdf_async(
                             azure_excel_url=None,
                             processing_status="failed",
                             processing_time_seconds=None,
-                            error_message=result.get("error", "Unknown error")
+                            error_message=result.get("error", "Unknown error"),
+                            task_id=task_id,
+                            client_ip=client_ip
                         )
                         logger.info(f"Saved failed processing result to cache for key {cache_key[:16]}...")
                         break

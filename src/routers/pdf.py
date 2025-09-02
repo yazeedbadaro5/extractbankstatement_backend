@@ -1,4 +1,5 @@
 import asyncio
+import json
 import os
 import tempfile
 from datetime import datetime
@@ -7,6 +8,7 @@ from typing import Optional, List
 import redis
 from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File, Form, Request
 from fastapi.responses import FileResponse
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.middleware.auth import get_client_ip, get_current_user_optional
 from src.models.user import User
@@ -176,25 +178,162 @@ async def create_pdf_extraction_task(
     )
 
 
+@router.get("/my-recent-tasks")
+async def get_recent_tasks(
+    request: Request,
+    current_user: Optional[User] = Depends(get_current_user_optional),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Get recent tasks for current user.
+    
+    - Authenticated users: Get all their tasks from database
+    - Anonymous users: Get their IP's tasks from Redis (last 24 hours)
+    """
+    if current_user:
+        # Authenticated user - get BOTH Redis (active) and Database (completed) tasks
+        tasks = []
+        seen_task_ids = set()
+        
+        # 1. Get active tasks from Redis (last 24 hours)
+        pattern = f"{task_manager.task_prefix}*"
+        task_keys = task_manager.redis_client.keys(pattern)
+        logger.info(f"Found {len(task_keys)} Redis tasks for user {current_user.id}")
+        
+        for task_key in task_keys:
+            task_json = task_manager.redis_client.get(task_key)
+            if task_json:
+                task_data = json.loads(task_json)
+                # Include ALL tasks for this user (active and recently completed)
+                # Handle both string and integer user_id comparisons
+                task_user_id = task_data.get("user_id")
+                if task_user_id in [str(current_user.id), current_user.id]:
+                    is_active = task_data.get("status") in ["pending", "processing"]
+                    
+                    logger.info(f"Found Redis task: {task_data['task_id']} for user {current_user.id}, status: {task_data.get('status')}")
+                    tasks.append({
+                        "task_id": task_data["task_id"],
+                        "filename": task_data["filename"],
+                        "status": task_data["status"],
+                        "is_active": is_active,
+                        "progress": task_data.get("progress", 0),
+                        "message": task_data.get("message", ""),
+                        "created_at": task_data["created_at"],
+                        "completed_at": task_data.get("updated_at") if not is_active else None,
+                        "download_available": task_data.get("status") == "completed"
+                    })
+                    seen_task_ids.add(task_data["task_id"])
+        
+        # 2. Get completed tasks from database
+        from sqlalchemy import select, desc
+        from src.models.processed_file import ProcessedFile
+        
+        query = select(ProcessedFile).where(
+            ProcessedFile.user_id == current_user.id
+        ).order_by(desc(ProcessedFile.created_at)).limit(20)
+        
+        result = await db.execute(query)
+        db_tasks = result.scalars().all()
+        
+        for db_task in db_tasks:
+            # Skip if we already have this task from Redis (active)
+            if db_task.task_id and db_task.task_id in seen_task_ids:
+                continue
+                
+            tasks.append({
+                "task_id": db_task.task_id,
+                "filename": db_task.original_filename,
+                "status": db_task.processing_status,
+                "is_active": False,
+                "created_at": db_task.created_at.isoformat(),
+                "completed_at": db_task.updated_at.isoformat(),
+                "download_available": db_task.processing_status == "completed" and db_task.azure_excel_url is not None
+            })
+        
+        # 3. Sort all tasks by creation time (newest first)
+        tasks.sort(key=lambda x: x["created_at"], reverse=True)
+        
+        return {"tasks": tasks}
+    
+    else:
+        # Anonymous user - get from Redis by IP
+        client_ip = get_client_ip(request)
+        pattern = f"{task_manager.task_prefix}*"
+        task_keys = task_manager.redis_client.keys(pattern)
+        
+        tasks = []
+        for task_key in task_keys:
+            task_json = task_manager.redis_client.get(task_key)
+            if task_json:
+                task_data = json.loads(task_json)
+                if task_data.get("client_ip") == client_ip:
+                    tasks.append({
+                        "task_id": task_data["task_id"],
+                        "filename": task_data["filename"],
+                        "status": task_data["status"],
+                        "is_active": task_data["status"] in ["pending", "processing"],
+                        "progress": task_data.get("progress", 0),
+                        "message": task_data.get("message", ""),
+                        "created_at": task_data["created_at"]
+                    })
+        
+        # Sort by creation time (newest first)
+        tasks.sort(key=lambda x: x["created_at"], reverse=True)
+        
+        return {"tasks": tasks}
+
+
 @router.get("/tasks/{task_id}", response_model=TaskProgressResponse)
 async def get_task_progress(
-    task_id: str
+    task_id: str,
+    db: AsyncSession = Depends(get_db)
 ):
     """
     Get task progress and results.
     
-    Returns current status, progress, and results when completed.
+    Checks Redis first for active tasks, then database for completed tasks.
     No authentication required - task IDs are UUID-based for security.
     """
-    task = task_manager.get_task(task_id)
+    # Check Redis first (for active tasks)
+    redis_task = task_manager.get_task(task_id)
+    if redis_task:
+        return redis_task
     
-    if not task:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Task not found"
-        )
+    # Check database for completed tasks
+    from sqlalchemy import select
+    from src.models.processed_file import ProcessedFile
     
-    return task
+    query = select(ProcessedFile).where(ProcessedFile.task_id == task_id)
+    result = await db.execute(query)
+    db_task = result.scalar_one_or_none()
+    
+    if db_task:
+        # Convert database record to TaskProgressResponse format
+        response_data = {
+            "task_id": task_id,
+            "status": TaskStatus.COMPLETED if db_task.processing_status == "completed" else TaskStatus.FAILED,
+            "progress": 100.0 if db_task.processing_status == "completed" else 0.0,
+            "message": "Processing completed successfully" if db_task.processing_status == "completed" else f"Failed: {db_task.error_message}",
+            "filename": db_task.original_filename,
+        }
+        
+        if db_task.processing_status == "completed":
+            # Add completion details
+            response_data.update({
+                "processing_time": db_task.processing_time_seconds,
+                "statement_file_id": db_task.cache_key
+            })
+        else:
+            # Add error details
+            response_data["error"] = db_task.error_message
+        
+        return TaskProgressResponse(**response_data)
+    
+    # Task not found in either location
+    raise HTTPException(
+        status_code=status.HTTP_404_NOT_FOUND,
+        detail="Task not found"
+    )
 
 
 @router.get("/download/{file_id}")
