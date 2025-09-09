@@ -23,6 +23,146 @@ from src.models.base import Base
 logger = get_logger(__name__)
 
 
+def _save_processing_result_sync(
+    user_id, file_hash, columns_hash, cache_key, columns, filename, file_bytes,
+    azure_excel_url, processing_status, processing_time, task_id, error_message
+):
+    """Helper function to save processing results using separate event loop"""
+    import asyncio
+    import threading
+    
+    def run_in_thread():
+        # Create a new event loop for this thread
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        
+        try:
+            return loop.run_until_complete(_save_processing_result_async(
+                user_id, file_hash, columns_hash, cache_key, columns, filename, 
+                file_bytes, azure_excel_url, processing_status, processing_time, 
+                task_id, error_message
+            ))
+        finally:
+            loop.close()
+    
+    # Run in a separate thread to avoid event loop conflicts
+    import concurrent.futures
+    with concurrent.futures.ThreadPoolExecutor() as executor:
+        future = executor.submit(run_in_thread)
+        return future.result()
+
+
+async def _save_processing_result_async(
+    user_id, file_hash, columns_hash, cache_key, columns, filename, file_bytes,
+    azure_excel_url, processing_status, processing_time, task_id, error_message
+):
+    """Async helper for saving processing results"""
+    from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession
+    from src.configuration.config import settings
+    
+    # Create a dedicated engine for this operation
+    engine = create_async_engine(
+        settings.database_url,
+        echo=False,
+        future=True,
+        pool_size=5,
+        max_overflow=10
+    )
+    
+    session_factory = async_sessionmaker(
+        engine,
+        class_=AsyncSession,
+        expire_on_commit=False
+    )
+    
+    async with session_factory() as db:
+        try:
+            azure_pdf_url = f"https://{settings.azure_storage_account_name}.blob.core.windows.net/bank-statements/pdfs/{file_hash}.pdf"
+            
+            # Get task data from Redis to extract client_ip
+            task_data_json = task_manager.redis_client.get(f"task:{task_id}")
+            task_data = json.loads(task_data_json) if task_data_json else {}
+            client_ip = task_data.get("client_ip")
+            
+            await file_cache_service.save_processed_file(
+                db=db,
+                user_id=user_id,
+                file_hash=file_hash,
+                columns_hash=columns_hash,
+                cache_key=cache_key,
+                columns=columns,
+                original_filename=filename,
+                file_size_bytes=len(file_bytes),
+                azure_pdf_url=azure_pdf_url,
+                azure_excel_url=azure_excel_url,
+                processing_status=processing_status,
+                processing_time_seconds=processing_time,
+                error_message=error_message,
+                task_id=task_id,
+                client_ip=client_ip
+            )
+            await db.commit()
+            logger.info(f"Saved {processing_status} processing result to cache for key {cache_key[:16]}...")
+        except Exception as e:
+            await db.rollback()
+            raise e
+        finally:
+            await engine.dispose()
+
+
+def _sync_user_credits_sync(user_id):
+    """Helper function to sync user credits using separate event loop"""
+    import asyncio
+    import threading
+    
+    def run_in_thread():
+        # Create a new event loop for this thread
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        
+        try:
+            return loop.run_until_complete(_sync_user_credits_async(user_id))
+        finally:
+            loop.close()
+    
+    # Run in a separate thread to avoid event loop conflicts
+    import concurrent.futures
+    with concurrent.futures.ThreadPoolExecutor() as executor:
+        future = executor.submit(run_in_thread)
+        return future.result()
+
+
+async def _sync_user_credits_async(user_id):
+    """Async helper for syncing user credits"""
+    from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession
+    from src.configuration.config import settings
+    
+    # Create a dedicated engine for this operation
+    engine = create_async_engine(
+        settings.database_url,
+        echo=False,
+        future=True,
+        pool_size=5,
+        max_overflow=10
+    )
+    
+    session_factory = async_sessionmaker(
+        engine,
+        class_=AsyncSession,
+        expire_on_commit=False
+    )
+    
+    async with session_factory() as db:
+        try:
+            await redis_credit_service.sync_database_balance(user_id, db)
+            await db.commit()
+        except Exception as e:
+            await db.rollback()
+            raise e
+        finally:
+            await engine.dispose()
+
+
 @celery_app.task(
     bind=True,
     name="src.services.celery_tasks.process_pdf_task",
@@ -49,7 +189,7 @@ def process_pdf_task(
         # Update status to processing
         task_manager.update_task_status(task_id, TaskStatus.PROCESSING, "Starting PDF extraction", 10.0)
         
-        # Run the async extraction
+        # Run the async extraction with thread-safe event loop
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         
@@ -69,6 +209,14 @@ def process_pdf_task(
             )
             return result
         finally:
+            # Ensure all pending tasks are completed before closing
+            pending_tasks = [task for task in asyncio.all_tasks(loop) if not task.done()]
+            if pending_tasks:
+                logger.warning(f"Cancelling {len(pending_tasks)} pending tasks")
+                for task in pending_tasks:
+                    task.cancel()
+                # Wait for tasks to cancel
+                loop.run_until_complete(asyncio.gather(*pending_tasks, return_exceptions=True))
             loop.close()
             
     except Exception as e:
@@ -174,33 +322,20 @@ async def _process_pdf_async(
                         azure_excel_url = await file_cache_service.store_excel_result(cache_key, excel_content)
                         
                         # Save processing result to cache
-                        from src.database import get_db
-                        async for db in get_db():
-                            azure_pdf_url = f"https://{settings.azure_storage_account_name}.blob.core.windows.net/bank-statements/pdfs/{file_hash}.pdf"
-                            
-                            # Get task data from Redis to extract client_ip
-                            task_data_json = task_manager.redis_client.get(f"task:{task_id}")
-                            task_data = json.loads(task_data_json) if task_data_json else {}
-                            client_ip = task_data.get("client_ip")
-                            
-                            await file_cache_service.save_processed_file(
-                                db=db,
-                                user_id=user_id,
-                                file_hash=file_hash,
-                                columns_hash=columns_hash,
-                                cache_key=cache_key,
-                                columns=columns,
-                                original_filename=filename,
-                                file_size_bytes=len(file_bytes),
-                                azure_pdf_url=azure_pdf_url,
-                                azure_excel_url=azure_excel_url,
-                                processing_status="completed",
-                                processing_time_seconds=result["processing_time"],
-                                task_id=task_id,
-                                client_ip=client_ip
-                            )
-                            logger.info(f"Saved successful processing result to cache for key {cache_key[:16]}...")
-                            break
+                        _save_processing_result_sync(
+                            user_id=user_id,
+                            file_hash=file_hash,
+                            columns_hash=columns_hash,
+                            cache_key=cache_key,
+                            columns=columns,
+                            filename=filename,
+                            file_bytes=file_bytes,
+                            azure_excel_url=azure_excel_url,
+                            processing_status="completed",
+                            processing_time=result["processing_time"],
+                            task_id=task_id,
+                            error_message=None
+                        )
                     except Exception as e:
                         logger.error(f"Error saving to cache for task {task_id}: {e}")
                 
@@ -213,10 +348,7 @@ async def _process_pdf_async(
                             logger.info(f"Confirmed {required_credits} credits usage for user_id {user_id} for task {task_id}")
                             
                             # Sync database balance with Redis
-                            from src.database import get_db
-                            async for db in get_db():
-                                await redis_credit_service.sync_database_balance(user_id, db)
-                                break
+                            _sync_user_credits_sync(user_id)
                     except Exception as e:
                         logger.error(f"Failed to confirm credit usage for task {task_id}: {e}")
                 else:
@@ -237,34 +369,20 @@ async def _process_pdf_async(
             # Handle failed processing
             if cache_key:
                 try:
-                    from src.database import get_db
-                    async for db in get_db():
-                        azure_pdf_url = f"https://{settings.azure_storage_account_name}.blob.core.windows.net/bank-statements/pdfs/{file_hash}.pdf"
-                        
-                        # Get task data from Redis to extract client_ip
-                        task_data_json = task_manager.redis_client.get(f"task:{task_id}")
-                        task_data = json.loads(task_data_json) if task_data_json else {}
-                        client_ip = task_data.get("client_ip")
-                        
-                        await file_cache_service.save_processed_file(
-                            db=db,
-                            user_id=user_id,
-                            file_hash=file_hash,
-                            columns_hash=columns_hash,
-                            cache_key=cache_key,
-                            columns=columns,
-                            original_filename=filename,
-                            file_size_bytes=len(file_bytes),
-                            azure_pdf_url=azure_pdf_url,
-                            azure_excel_url=None,
-                            processing_status="failed",
-                            processing_time_seconds=None,
-                            error_message=result.get("error", "Unknown error"),
-                            task_id=task_id,
-                            client_ip=client_ip
-                        )
-                        logger.info(f"Saved failed processing result to cache for key {cache_key[:16]}...")
-                        break
+                    _save_processing_result_sync(
+                        user_id=user_id,
+                        file_hash=file_hash,
+                        columns_hash=columns_hash,
+                        cache_key=cache_key,
+                        columns=columns,
+                        filename=filename,
+                        file_bytes=file_bytes,
+                        azure_excel_url=None,
+                        processing_status="failed",
+                        processing_time=None,
+                        task_id=task_id,
+                        error_message=result.get("error", "Unknown error")
+                    )
                 except Exception as e:
                     logger.error(f"Error saving failed result to cache for task {task_id}: {e}")
             
