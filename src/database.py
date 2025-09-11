@@ -12,10 +12,18 @@ class DatabaseManager:
             settings.database_url,
             echo=False,
             future=True,
-            pool_size=20,
-            max_overflow=30,
-            pool_pre_ping=True,
-            pool_recycle=3600
+            # Optimized for high-concurrency async operations
+            pool_size=50,          # Base connection pool size
+            max_overflow=100,      # Additional connections for bursts  
+            pool_pre_ping=True,    # Verify connections before use
+            pool_recycle=1800,     # Recycle connections every 30min
+            pool_timeout=30,       # Timeout for getting connection
+            # Connection settings for FastAPI async operations
+            connect_args={
+                "server_settings": {
+                    "application_name": "fastapi_async_app",
+                }
+            }
         )
         
         self.session_factory = async_sessionmaker(

@@ -27,15 +27,11 @@ celery_app.conf.update(
     
     # Result backend settings
     result_expires=3600,  # 1 hour
-    result_backend_transport_options={
-        "master_name": "mymaster",
-        "visibility_timeout": 3600,
-    },
     
-    # Worker settings optimized for 4x8 VM
-    worker_prefetch_multiplier=1,  # Important for CPU-intensive tasks
+    # Worker settings optimized for process-based workers
+    worker_prefetch_multiplier=1,  # Fair distribution - each worker takes one task at a time
     task_acks_late=True,  # Acknowledge tasks only after completion
-    worker_max_tasks_per_child=10,  # Restart workers after 10 tasks to prevent memory leaks
+    worker_max_tasks_per_child=5,  # Restart workers frequently to prevent memory leaks
     
     # Routing
     task_routes={
@@ -55,13 +51,9 @@ celery_app.conf.update(
     },
 )
 
-# Configure queues
-celery_app.conf.task_default_queue = "default"
+# Configure queue for PDF processing tasks
+celery_app.conf.task_default_queue = "pdf_processing"
 celery_app.conf.task_queues = {
-    "default": {
-        "exchange": "default",
-        "routing_key": "default",
-    },
     "pdf_processing": {
         "exchange": "pdf_processing", 
         "routing_key": "pdf_processing",

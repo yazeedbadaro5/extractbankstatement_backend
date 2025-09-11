@@ -43,7 +43,7 @@ dependencies = [
     "fastapi-limiter (>=0.1.6,<0.2.0)",
     "redis (>=6.4.0,<7.0.0)",
     "azure-storage-blob (>=12.19.0,<13.0.0)",
-    "celery[redis] (>=5.3.0,<6.0.0)"
+    "celery[redis] (>=5.3.0,<6.0.0)",
 ]
 
 

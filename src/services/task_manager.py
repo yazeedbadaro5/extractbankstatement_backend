@@ -30,7 +30,7 @@ class TaskManager:
             "page_count": page_count,
             "client_ip": client_ip,
             "created_at": datetime.now().isoformat(),
-            "progress": 0.0,
+            "progress": 0,
             "message": "Task created, waiting to start processing"
         }
         
@@ -54,7 +54,7 @@ class TaskManager:
             task_data["status"] = status.value
             task_data["message"] = message
             if progress is not None:
-                task_data["progress"] = progress
+                task_data["progress"] = round(progress)
             
             # Update in Redis
             self.redis_client.setex(task_key, 86400, json.dumps(task_data))
@@ -76,7 +76,7 @@ class TaskManager:
             total_progress = 10 + page_progress
             
             message = f"Processing page {pages_completed}/{total_pages}"
-            task_data["progress"] = total_progress
+            task_data["progress"] = round(total_progress)
             task_data["message"] = message
             
             # Update in Redis
@@ -94,7 +94,7 @@ class TaskManager:
             task_data = json.loads(task_json)
             task_data.update({
                 "status": TaskStatus.COMPLETED.value,
-                "progress": 100.0,
+                "progress": 100,
                 "message": "Processing completed successfully",
                 "total_rows": result["total_rows"],
                 "total_columns": len(result["columns"]),
@@ -142,7 +142,7 @@ class TaskManager:
         response_data = {
             "task_id": task_id,
             "status": TaskStatus(task_data["status"]),
-            "progress": task_data.get("progress", 0.0),
+            "progress": task_data.get("progress", 0),
             "message": task_data["message"]
         }
         

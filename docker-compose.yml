@@ -5,7 +5,7 @@ services:
     restart: unless-stopped
     volumes:
       - redis_data:/data
-    command: redis-server --appendonly yes --maxmemory 1gb --maxmemory-policy allkeys-lru
+    command: redis-server --appendonly yes --maxmemory 512mb --maxmemory-policy allkeys-lru
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 30s
@@ -14,11 +14,11 @@ services:
     deploy:
       resources:
         limits:
-          cpus: '0.5'
-          memory: 1G
-        reservations:
           cpus: '0.2'
           memory: 512M
+        reservations:
+          cpus: '0.1'
+          memory: 256M
 
   migrations:
     build: .
@@ -73,11 +73,11 @@ services:
     deploy:
       resources:
         limits:
-          cpus: '1.0'
-          memory: 2G
-        reservations:
           cpus: '0.5'
           memory: 1G
+        reservations:
+          cpus: '0.2'
+          memory: 512M
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       interval: 30s
@@ -85,11 +85,12 @@ services:
       retries: 3
       start_period: 40s
 
-  celery-worker:
+  # Primary worker for PDF processing - optimized for 4-core 8GB VM
+  celery-worker-1:
     build: .
-    container_name: celery-worker
+    container_name: celery-worker-1
     restart: unless-stopped
-    command: celery -A src.celery_app worker --loglevel=info --concurrency=2
+    command: celery -A src.celery_app worker --loglevel=info --concurrency=4 --queues=pdf_processing --hostname=worker-1@%h
     env_file:
       - .env
     environment:
@@ -102,11 +103,41 @@ services:
     deploy:
       resources:
         limits:
-          cpus: '3.0'
-          memory: 5G
-        reservations:
           cpus: '2.0'
           memory: 3G
+        reservations:
+          cpus: '1.0'
+          memory: 1.5G
+    healthcheck:
+      test: ["CMD", "celery", "-A", "src.celery_app", "inspect", "ping"]
+      interval: 60s
+      timeout: 30s
+      retries: 3
+      start_period: 60s
+
+  # Secondary worker for overflow processing
+  celery-worker-2:
+    build: .
+    container_name: celery-worker-2
+    restart: unless-stopped
+    command: celery -A src.celery_app worker --loglevel=info --concurrency=4 --queues=pdf_processing --hostname=worker-2@%h
+    env_file:
+      - .env
+    environment:
+      - ENVIRONMENT=production
+    depends_on:
+      redis:
+        condition: service_healthy
+      migrations:
+        condition: service_completed_successfully
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 3G
+        reservations:
+          cpus: '1.0'
+          memory: 1.5G
     healthcheck:
       test: ["CMD", "celery", "-A", "src.celery_app", "inspect", "ping"]
       interval: 60s
