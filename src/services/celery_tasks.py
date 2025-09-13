@@ -45,23 +45,70 @@ def _save_processing_result_sync(
                 
                 azure_pdf_url = f"https://{settings.azure_storage_account_name}.blob.core.windows.net/bank-statements/pdfs/{file_hash}.pdf"
                 
-                # Insert processed file record
+                # Check if record exists and its current status
                 cursor.execute("""
-                    INSERT INTO processed_files (
-                        user_id, file_hash, columns_hash, cache_key, columns, 
-                        original_filename, file_size_bytes, azure_pdf_url, azure_excel_url,
-                        processing_status, processing_time_seconds, error_message, 
-                        task_id, client_ip, created_at, updated_at
-                    ) VALUES (
-                        %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW(), NOW()
-                    )
-                """, (
-                    user_id, file_hash, columns_hash, cache_key, json.dumps(columns) if columns else None,
-                    filename, len(file_bytes), azure_pdf_url, azure_excel_url,
-                    processing_status, processing_time, error_message, task_id, client_ip
-                ))
+                    SELECT processing_status FROM processed_files WHERE cache_key = %s
+                """, (cache_key,))
+                
+                existing_record = cursor.fetchone()
+                
+                if existing_record:
+                    existing_status = existing_record[0]
+                    
+                    if existing_status == 'completed':
+                        # Don't allow overwriting completed records
+                        logger.warning(f"Skipping insert - cache key {cache_key[:16]}... already has completed status")
+                        return
+                    elif existing_status == 'failed' and processing_status == 'completed':
+                        # Update failed record to completed
+                        cursor.execute("""
+                            UPDATE processed_files SET 
+                                azure_excel_url = %s,
+                                processing_status = %s,
+                                processing_time_seconds = %s,
+                                error_message = %s,
+                                task_id = %s,
+                                updated_at = NOW()
+                            WHERE cache_key = %s
+                        """, (
+                            azure_excel_url, processing_status, processing_time, 
+                            error_message, task_id, cache_key
+                        ))
+                        logger.info(f"Updated failed record to {processing_status} for cache key {cache_key[:16]}...")
+                    else:
+                        # For any other case (failed->failed, etc.), update the record
+                        cursor.execute("""
+                            UPDATE processed_files SET 
+                                azure_excel_url = %s,
+                                processing_status = %s,
+                                processing_time_seconds = %s,
+                                error_message = %s,
+                                task_id = %s,
+                                updated_at = NOW()
+                            WHERE cache_key = %s
+                        """, (
+                            azure_excel_url, processing_status, processing_time, 
+                            error_message, task_id, cache_key
+                        ))
+                        logger.info(f"Updated existing record to {processing_status} for cache key {cache_key[:16]}...")
+                else:
+                    # Insert new record
+                    cursor.execute("""
+                        INSERT INTO processed_files (
+                            user_id, file_hash, columns_hash, cache_key, columns, 
+                            original_filename, file_size_bytes, azure_pdf_url, azure_excel_url,
+                            processing_status, processing_time_seconds, error_message, 
+                            task_id, client_ip, created_at, updated_at
+                        ) VALUES (
+                            %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW(), NOW()
+                        )
+                    """, (
+                        user_id, file_hash, columns_hash, cache_key, json.dumps(columns) if columns else None,
+                        filename, len(file_bytes), azure_pdf_url, azure_excel_url,
+                        processing_status, processing_time, error_message, task_id, client_ip
+                    ))
+                    logger.info(f"Inserted new {processing_status} record for cache key {cache_key[:16]}...")
                 conn.commit()
-                logger.info(f"Saved {processing_status} processing result to cache for key {cache_key[:16] if cache_key else 'unknown'}...")
                 
     except Exception as e:
         logger.error(f"Failed to save processing result for task {task_id}: {e}")

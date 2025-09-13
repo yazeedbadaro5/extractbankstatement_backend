@@ -50,37 +50,50 @@ logging.getLogger('grpc').setLevel(logging.CRITICAL)
 logger = get_logger(__name__)
 
 
-class RetryableAPIError(Exception):
-    """Exception for API errors that should be retried"""
-    pass
-
 class IntentionalEmptyResultError(Exception):
     """Exception for when the AI intentionally returns empty results (should not retry)"""
     pass
 
 
-def is_retryable_error(exception):
-    """Determine if an error should be retried"""
-    error_msg = str(exception).lower()
-    
-    # Retry on these types of errors
-    retryable_patterns = [
-        "500 an internal error has occurred",
-        "503 service unavailable", 
-        "502 bad gateway",
-        "504 gateway timeout",
-        "connection error",
-        "timeout",
-        "rate limit",
-        "quota exceeded"
-    ]
-    
-    return any(pattern in error_msg for pattern in retryable_patterns)
 
 
 class TableRow(BaseModel):
     """Represents a single row in a bank statement table"""
     data: Dict[str, Any] = Field(description="Dictionary containing column names as keys and cell values as values")
+
+
+class StrictTableData(BaseModel):
+    """Strict table data model that validates against required columns"""
+    model_config = {'extra': 'forbid'}
+    table_data: List[Dict[str, Any]] = Field(description="List of transaction rows with exact column structure")
+    
+    @classmethod
+    def create_with_columns(cls, required_columns: List[str]):
+        """Create a validator that ensures only required columns are present"""
+        def validate_data(data):
+            if not isinstance(data, dict) or 'table_data' not in data:
+                raise ValueError("Data must contain 'table_data' field")
+            
+            validated_rows = []
+            for row in data['table_data']:
+                if not isinstance(row, dict):
+                    continue
+                    
+                # Check for extra columns
+                extra_cols = set(row.keys()) - set(required_columns)
+                if extra_cols:
+                    raise ValueError(f"Extra columns not allowed: {extra_cols}. Only these columns are permitted: {required_columns}")
+                
+                # Create row with only required columns
+                validated_row = {}
+                for col in required_columns:
+                    validated_row[col] = row.get(col)
+                    
+                validated_rows.append(validated_row)
+            
+            return {'table_data': validated_rows}
+        
+        return validate_data
 
 
 class TableData(BaseModel):
@@ -94,6 +107,17 @@ class ColumnSchema(BaseModel):
 class StandardizedColumns(BaseModel):
     """Represents the final standardized column names for consistent extraction"""
     final_columns: List[str] = Field(description="Final standardized column names to use for all extractions")
+    
+    def create_strict_schema(self) -> str:
+        """Create a strict JSON schema description for the standardized columns"""
+        schema_desc = "{\n  \"table_data\": [\n    {\n"
+        for i, col in enumerate(self.final_columns):
+            schema_desc += f'      "{col}": "<value_for_{col.replace(" ", "_").replace("/", "_").lower()}>"'
+            if i < len(self.final_columns) - 1:
+                schema_desc += ","
+            schema_desc += "\n"
+        schema_desc += "    }\n  ]\n}"
+        return schema_desc
 
 
 class UniversalPDFExtractionService:
@@ -106,7 +130,7 @@ class UniversalPDFExtractionService:
     def create_llm(self):
         """Create a fresh LLM instance for each batch to avoid gRPC connection conflicts"""
         return ChatGoogleGenerativeAI(
-            model="gemini-2.5-pro-preview-03-25",
+            model="gemini-2.5-pro",
             google_api_key=settings.gemini_api_key,
             temperature=0,
             max_retries=0,  # Let Tenacity handle all retries
@@ -286,8 +310,8 @@ class UniversalPDFExtractionService:
                     except IntentionalEmptyResultError:
                         logger.info(f"Page {page_num}: Intentionally empty - skipping")
                         result = None
-                    except RetryableAPIError as e:
-                        logger.error(f"Page {page_num}: API error persisted after 3 retries: {e}")
+                    except Exception as e:
+                        logger.error(f"Page {page_num}: All retries failed: {type(e).__name__}: {str(e)}")
                         result = None
                     
                     if result and result.get('table_data'):
@@ -362,11 +386,20 @@ class UniversalPDFExtractionService:
                                         required_columns: Optional[List[str]]) -> Optional[Dict]:
         """Internal method with retry logic for vision-based API errors"""
         try:
-            # Create the JSON output parser
+            # Use the regular TableData model - we'll validate after parsing
             parser = JsonOutputParser(pydantic_object=TableData)
             
             # Include format instructions from the parser
             format_instructions = parser.get_format_instructions()
+            
+            # Create strict column schema
+            columns_schema = "{\n  \"table_data\": [\n    {\n"
+            for i, col in enumerate(required_columns):
+                columns_schema += f'      "{col}": "<extract_value_here>"'
+                if i < len(required_columns) - 1:
+                    columns_schema += ","
+                columns_schema += "\n"
+            columns_schema += "    }\n  ]\n}"
             
             # Modern 2025 vision prompt with Chain of Thought
             prompt_text = f"""You are an expert financial data analyst specializing in bank statement processing. Your task is to extract transaction data from this bank statement page image with perfect accuracy and consistency.
@@ -375,16 +408,31 @@ class UniversalPDFExtractionService:
 
 **Document Type**: Bank Statement Page {page_num}
 **Task**: Extract all financial transactions into structured JSON format
-**REQUIRED COLUMNS (EXACT NAMES)**: {', '.join(required_columns) if required_columns else 'All available transaction fields'}
+**MANDATORY COLUMN NAMES**: {required_columns if required_columns else 'All available transaction fields'}
 
-## CRITICAL COLUMN MAPPING REQUIREMENT
+## 🚨 CRITICAL COLUMN ENFORCEMENT 🚨
 
-🔴 **USE EXACT COLUMN NAMES FROM REQUIRED LIST ABOVE**
-- You MUST use the exact column names provided in "REQUIRED COLUMNS" 
-- Do NOT create new column names or variations
-- Map the visual columns in the image to the required column names
-- If a visual column doesn't match any required column, skip it
-- If a required column is not visible on this page, omit it from the result
+**YOU MUST ONLY USE THESE EXACT COLUMN NAMES:**
+{chr(10).join([f'- "{col}"' for col in required_columns]) if required_columns else ''}
+
+**ABSOLUTELY FORBIDDEN:**
+- Creating ANY new column names
+- Using variations or translations of column names
+- Adding extra columns not in the list above
+- Modifying column names in any way
+
+**REQUIRED JSON STRUCTURE:**
+```json
+{columns_schema}
+```
+
+## STRICT MAPPING RULES
+
+🔴 **COLUMN NAME COMPLIANCE:**
+- Use ONLY the column names from the mandatory list above
+- If you see a visual column that doesn't match any required column name, IGNORE IT
+- If a required column is not visible on this page, set its value to null
+- NEVER create new column names or variations
 
 ## STEP-BY-STEP VISUAL ANALYSIS PROCESS
 
@@ -449,6 +497,17 @@ class UniversalPDFExtractionService:
 
 ## OUTPUT FORMAT SPECIFICATION
 
+**YOU MUST RETURN EXACTLY THIS JSON STRUCTURE:**
+```json
+{columns_schema}
+```
+
+**VALIDATION RULES:**
+- Each row must contain ONLY the {len(required_columns)} required columns
+- No additional columns allowed
+- Missing required columns should have null values
+- Every row must follow the exact structure above
+
 {format_instructions}
 
 ## CHAIN OF THOUGHT REASONING
@@ -494,34 +553,47 @@ Analyze the bank statement page image step by step, then provide the extracted t
             # Use LangChain's JSON parser to parse the response
             try:
                 result = parser.parse(response.content)
+                # Convert Pydantic model back to dict for compatibility
+                if hasattr(result, 'model_dump'):
+                    result = result.model_dump()
+                elif hasattr(result, 'dict'):
+                    result = result.dict()
+                
+                # Apply strict column validation if required columns are specified
+                if required_columns and result and 'table_data' in result:
+                    validator = StrictTableData.create_with_columns(required_columns)
+                    result = validator(result)
+                    logger.info(f"Page {page_num}: Validated to only include required columns")
+                    
                 return result
             except Exception as e:
-                logger.error(f"Page {page_num}: Failed to parse LLM response with LangChain parser: {e}")
+                logger.error(f"Page {page_num}: Parsing/validation failed: {type(e).__name__}: {str(e)}")
                 # Fallback to manual JSON extraction if parser fails
                 import re
                 json_match = re.search(r'\{.*\}', response.content, re.DOTALL)
                 if json_match:
                     try:
                         result = json.loads(json_match.group())
+                        # Apply validation to manual parsing too
+                        if required_columns and result and 'table_data' in result:
+                            validator = StrictTableData.create_with_columns(required_columns)
+                            result = validator(result)
+                            logger.info(f"Page {page_num}: Manual parse validated to required columns")
                         return result
-                    except json.JSONDecodeError:
+                    except (json.JSONDecodeError, ValueError):
                         pass
-                return None
+                # If we can't parse or validate, trigger retry
+                raise  # Let tenacity handle the retry
                 
         except Exception as e:
-            # Check if this is a retryable error
-            if is_retryable_error(e):
-                logger.warning(f"Page {page_num}: Retryable API error encountered: {e}")
-                raise RetryableAPIError(f"API error for page {page_num}: {e}") from e
-            else:
-                # Non-retryable error - log and return None
-                logger.error(f"Page {page_num}: Non-retryable error in vision extraction: {e}")
-                return None
+            # Retry all exceptions except IntentionalEmptyResultError
+            logger.warning(f"Page {page_num}: Error encountered, will retry: {type(e).__name__}: {str(e)}")
+            raise  # Let tenacity handle the retry
     
     @retry(
-        retry=retry_if_exception(lambda e: is_retryable_error(e)),
-        stop=stop_after_attempt(2),
-        wait=wait_exponential(multiplier=1, min=2, max=5),  # 2s → 4s delays
+        retry=retry_if_exception(lambda e: not isinstance(e, IntentionalEmptyResultError)),
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(multiplier=1, min=2, max=8),  # 2s → 4s → 8s delays
         reraise=True
     )
     async def _extract_with_retry(self, llm, page_text: str, page_num: int, 
@@ -611,7 +683,7 @@ Analyze the bank statement page image step by step, then provide the extracted t
             
             if not response or not response.content:
                 logger.warning(f"Page {page_num}: Empty response from LLM - retrying")
-                raise RetryableAPIError(f"Empty response from LLM for page {page_num}")
+                raise RuntimeError(f"Empty response from LLM for page {page_num}")
             
             # Use LangChain's JSON parser to parse the response
             try:
@@ -623,6 +695,11 @@ Analyze the bank statement page image step by step, then provide the extracted t
                 elif isinstance(result, dict) and 'table_data' in result and not result['table_data']:
                     logger.info(f"Page {page_num}: AI intentionally returned empty table")
                     raise IntentionalEmptyResultError(f"AI returned empty table for page {page_num}")
+                    
+                # Validate and filter columns to match required_columns exactly
+                if result and required_columns:
+                    result = TableData.validate_columns(result, required_columns)
+                    logger.info(f"Page {page_num}: Text extraction - filtered to required columns: {list(result.get('table_data', [{}])[0].keys()) if result.get('table_data') else []}")
                 return result
             except IntentionalEmptyResultError:
                 # Re-raise so it's not retried
@@ -639,22 +716,26 @@ Analyze the bank statement page image step by step, then provide the extracted t
                         if 'table_data' in result_dict and not result_dict['table_data']:
                             logger.info(f"Page {page_num}: AI intentionally returned empty table")
                             raise IntentionalEmptyResultError(f"AI returned empty table for page {page_num}")
+                        # Validate and filter columns for manual parsing too
+                        if result_dict and required_columns:
+                            result_dict = TableData.validate_columns(result_dict, required_columns)
+                            logger.info(f"Page {page_num}: Text manual parse - filtered to required columns: {list(result_dict.get('table_data', [{}])[0].keys()) if result_dict.get('table_data') else []}")
                         return result_dict
                     except json.JSONDecodeError:
                         pass
                 # If we can't parse anything, retry this
-                raise RetryableAPIError(f"Could not parse response for page {page_num}: {e}")
+                raise  # Let tenacity handle the retry
                 
         except asyncio.TimeoutError:
             logger.error(f"Page {page_num}: Request timed out after 90 seconds - retrying")
-            raise RetryableAPIError(f"Timeout error for page {page_num}") from None
+            raise  # Let tenacity handle the retry
         except IntentionalEmptyResultError:
             # Don't retry intentional empty results
             raise
         except Exception as e:
             # Retry ALL other errors (API errors, network errors, etc.)
-            logger.warning(f"Page {page_num}: Error encountered - retrying: {type(e).__name__}: {e}")
-            raise RetryableAPIError(f"Error for page {page_num}: {e}") from e
+            logger.warning(f"Page {page_num}: Error encountered - retrying: {type(e).__name__}: {str(e)}")
+            raise  # Let tenacity handle the retry
 
     async def extract_column_schema_from_sample(self, file_bytes: bytes, total_pages: int, task_id: Optional[str] = None) -> List[str]:
         """Phase 1: Extract column names from a sample of pages (first 10% or max 3 pages) concurrently"""
@@ -777,13 +858,11 @@ Return a JSON object with a "columns" array containing the exact column names as
                 
         except asyncio.TimeoutError:
             logger.error(f"Page {page_num}: Column extraction timed out after 90 seconds")
-            raise RetryableAPIError(f"Timeout error for column extraction on page {page_num}") from None
+            raise  # Let tenacity handle the retry
         except Exception as e:
-            if is_retryable_error(e):
-                raise RetryableAPIError(f"API error for column extraction on page {page_num}: {e}") from e
-            else:
-                logger.error(f"Page {page_num}: Non-retryable error in column extraction: {type(e).__name__}: {e}")
-                return []
+            # Retry all exceptions except IntentionalEmptyResultError
+            logger.warning(f"Page {page_num}: Column extraction error, will retry: {type(e).__name__}: {str(e)}")
+            raise  # Let tenacity handle the retry
 
     async def standardize_column_names(self, extracted_columns: List[str]) -> List[str]:
         """Phase 2: Use LLM to standardize and finalize column names"""
