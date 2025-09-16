@@ -42,7 +42,13 @@ class Settings(BaseSettings):
     @property
     def database_url(self) -> str:
         """Construct database URL from components"""
-        return f"postgresql+asyncpg://{self.db_user}:{self.db_password}@{self.db_host}:{self.db_port}/{self.db_name}"
+        base_url = f"postgresql+asyncpg://{self.db_user}:{self.db_password}@{self.db_host}:{self.db_port}/{self.db_name}"
+
+        # Add SSL requirement for production environment
+        if self.environment == "production":
+            return f"{base_url}?sslmode=require"
+        else:
+            return base_url
     
     class Config:
         import os
