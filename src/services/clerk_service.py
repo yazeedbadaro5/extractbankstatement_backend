@@ -22,19 +22,30 @@ class ClerkService:
         # Format: pk_test_<base64_encoded_domain>
         if settings.clerk_publishable_key:
             try:
-                # Remove pk_test_ prefix
-                encoded_part = settings.clerk_publishable_key.replace('pk_test_', '')
+                # Remove pk_test_ or pk_live_ prefix
+                encoded_part = settings.clerk_publishable_key.replace('pk_test_', '').replace('pk_live_', '')
+
+                # Validate the encoded part is not empty
+                if not encoded_part:
+                    raise ValueError("Clerk publishable key is missing the domain part")
+
                 # Add padding if needed for base64 decoding
                 missing_padding = len(encoded_part) % 4
                 if missing_padding:
                     encoded_part += '=' * (4 - missing_padding)
+
                 # Decode base64 to get the domain
                 decoded_domain = base64.b64decode(encoded_part).decode('utf-8')
                 # Remove any trailing $ if present
                 domain = decoded_domain.rstrip('$')
+
+                if not domain:
+                    raise ValueError("Decoded domain is empty")
+
                 self.jwks_url = f"https://{domain}/.well-known/jwks.json"
             except Exception as e:
-                logger.error(f"Failed to decode Clerk publishable key: {e}")
+                logger.error(f"Failed to decode Clerk publishable key '{settings.clerk_publishable_key}': {e}")
+                logger.error("Please check that your CLERK_PUBLISHABLE_KEY is complete and valid")
                 self.jwks_url = ""
         else:
             self.jwks_url = ""
