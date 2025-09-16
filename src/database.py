@@ -8,22 +8,29 @@ class DatabaseManager:
     """Simple database manager for async operations"""
     
     def __init__(self):
+        # Configure SSL for asyncpg based on environment
+        connect_args = {
+            "server_settings": {
+                "application_name": "fastapi_async_app",
+            }
+        }
+
+        # Add SSL for production (Digital Ocean requires SSL)
+        if settings.environment == "production":
+            connect_args["ssl"] = "require"
+
         self.engine = create_async_engine(
             settings.database_url,
             echo=False,
             future=True,
             # Optimized for high-concurrency async operations
             pool_size=50,          # Base connection pool size
-            max_overflow=100,      # Additional connections for bursts  
+            max_overflow=100,      # Additional connections for bursts
             pool_pre_ping=True,    # Verify connections before use
             pool_recycle=1800,     # Recycle connections every 30min
             pool_timeout=30,       # Timeout for getting connection
             # Connection settings for FastAPI async operations
-            connect_args={
-                "server_settings": {
-                    "application_name": "fastapi_async_app",
-                }
-            }
+            connect_args=connect_args
         )
         
         self.session_factory = async_sessionmaker(
