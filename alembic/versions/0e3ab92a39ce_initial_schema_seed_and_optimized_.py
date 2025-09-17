@@ -191,20 +191,32 @@ def upgrade() -> None:
                     
                     # Extract credits from product metadata or use defaults based on price
                     if price.unit_amount:
-                        if price.unit_amount <= 1500:  # $15 or less
-                            default_credits = 400
-                        elif price.unit_amount <= 3000:  # $30 or less  
-                            default_credits = 1000
-                        else:  # More than $30
-                            default_credits = 4000
+                        # Use the actual price for monthly plans, convert yearly to monthly equivalent
+                        if price.recurring and price.recurring.interval == 'year':
+                            # For yearly plans: $90/year, $180/year, $300/year
+                            if price.unit_amount == 9000:  # $90/year
+                                default_credits = 400
+                            elif price.unit_amount == 18000:  # $180/year
+                                default_credits = 1000
+                            elif price.unit_amount == 30000:  # $300/year
+                                default_credits = 4000
+                            else:
+                                default_credits = 4000  # fallback for other yearly amounts
+                        else:
+                            # For monthly plans: $15/month, $30/month, $50/month
+                            if price.unit_amount <= 1500:  # $15 or less
+                                default_credits = 400
+                            elif price.unit_amount <= 3000:  # $30 or less
+                                default_credits = 1000
+                            else:  # More than $30
+                                default_credits = 4000
                     else:
                         default_credits = 100
-                        
+
                     monthly_credits = int(product.metadata.get('monthly_credits', default_credits))
-                    
-                    # For yearly plans, multiply by 12
-                    if price.recurring and price.recurring.interval == 'year':
-                        monthly_credits = monthly_credits * 12
+
+                    # For yearly plans, keep the same monthly credit amount (don't multiply by 12)
+                    # The monthly_credits field should represent credits per month regardless of billing interval
                     
                     plans.append({
                         'name': product.name,

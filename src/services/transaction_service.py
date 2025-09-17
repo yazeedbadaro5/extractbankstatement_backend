@@ -121,6 +121,20 @@ class TransactionService:
             )
             user_subscription = user_subscription_result.scalar_one_or_none()
             
+            # Calculate credits to award based on plan interval
+            # For yearly plans: award 12 months worth of credits upfront
+            # For monthly plans: award 1 month worth of credits
+            logger.info(f"🔍 Plan details: name='{plan.name}', interval='{plan.interval}', monthly_credits={plan.monthly_credits}")
+
+            credits_to_award = plan.monthly_credits
+            if plan.interval == 'year':
+                credits_to_award = plan.monthly_credits * 12
+                logger.info(f"🎁 Yearly plan detected: awarding {credits_to_award} credits (12x {plan.monthly_credits} monthly)")
+            else:
+                logger.info(f"📅 Monthly plan detected: awarding {credits_to_award} credits")
+
+            logger.info(f"💰 Final credits to award: {credits_to_award}")
+
             # Create transaction record
             transaction = Transaction(
                 user_id=user.id,
@@ -129,7 +143,7 @@ class TransactionService:
                 stripe_subscription_id=subscription_id,
                 amount=amount,
                 currency=currency,
-                credits_awarded=plan.monthly_credits,
+                credits_awarded=credits_to_award,
                 plan_name=plan.name,
                 billing_period=plan.interval,
                 description=f"{plan.name} {plan.interval}ly subscription",
@@ -152,7 +166,7 @@ class TransactionService:
             session.add(stripe_event)
             
             # Award credits to user via Redis
-            await redis_credit_service.add_credits(user.id, plan.monthly_credits)
+            await redis_credit_service.add_credits(user.id, credits_to_award)
             
             # Update user's database credit balance for consistency
             user.credits_balance = await redis_credit_service.get_user_credits(user.id)
